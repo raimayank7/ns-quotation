@@ -21,6 +21,8 @@
     po: { prefix: 'PO', kinds: ['po'], deliv: true, gstFlag: true, status: ['popen', 'prec', 'scan'], noLbl: 'pono', party: 'vendor', shipLbl: 'deliverto', refLbl: 'vqref', buying: true },
     note: { prefix: 'CN', prefixes: { credit: 'CN', debit: 'DN' }, kinds: ['credit', 'debit'], orig: true, gstFlag: true, copy: 'note', status: ['nissued', 'nadj', 'nref'],
       noLbl: { credit: 'cnno', debit: 'dnno' }, party: 'issuedto', note: { credit: 'cnnote', debit: 'dnnote' }, refLbl: 'ref' },
+    /* self invoice: a registered buyer bills itself for a purchase from an unregistered supplier under reverse charge (always GST, RC = Yes) */
+    self: { prefix: 'SI', kinds: ['self'], alwaysTax: true, rc: true, rcFixed: true, recv: true, buying: true, status: ['siopen', 'sipaid'], noLbl: 'sino', party: 'supplier', note: 'sinote', refLbl: 'ref' },
     cashmemo: { prefix: 'CM', kinds: ['cashmemo'], gstFlag: true, gstOff: true, qr: true, pay: true, paidFirst: true, noLbl: 'cmno', party: 'custto', paper: 'th80' }
   };
   var COPIES = { inv: ['orig', 'dup', 'trip'], invs: ['orig', 'dupsup'], dc: ['dcorig', 'dcdup', 'dctrip'], note: ['orig', 'dupsup'] };
@@ -40,7 +42,8 @@
     po: 'PURCHASE ORDER', pono: 'PO No.', vendor: 'Vendor (order to)', deliverto: 'Deliver to', vqref: 'Vendor quotation ref.', buyer: 'Buyer',
     credit: 'CREDIT NOTE', debit: 'DEBIT NOTE', cnno: 'Credit Note No.', dnno: 'Debit Note No.', issuedto: 'Issued to', against: 'Against invoice', invdate: 'Invoice date', reason: 'Reason',
     ret: 'Goods returned', price: 'Price changed', disc2: 'Discount after sale', short: 'Short or damaged supply', taxfix: 'Tax corrected',
-    dupsup: 'Duplicate for supplier', cashmemo: 'CASH MEMO', cmno: 'Memo No.', custto: 'Customer', cash: 'Cash', thanks: 'Thank you, visit again', recd: 'Goods received in good condition', recdsign: 'Receiver’s sign, name and date', items: 'Items', page: 'Page' };
+    dupsup: 'Duplicate for supplier', cashmemo: 'CASH MEMO', cmno: 'Memo No.', self: 'SELF INVOICE', sino: 'Self Invoice No.', supplier: 'Supplier (unregistered)', recv: 'Goods / services received on',
+    sinote: 'Self invoice issued by the recipient under section 31(3)(f) of the CGST Act for a supply received from an unregistered supplier. Tax is payable by the recipient on reverse charge.', custto: 'Customer', cash: 'Cash', thanks: 'Thank you, visit again', recd: 'Goods received in good condition', recdsign: 'Receiver’s sign, name and date', items: 'Items', page: 'Page' };
   /* reason codes print through RP (P.tax is the invoice title, so the "tax corrected" reason has its own word) */
   var RP = { ret: 'ret', price: 'price', disc: 'disc2', 'short': 'short', tax: 'taxfix', other: 'other' };
   var UNITS = ['Nos', 'Pcs', 'Kg', 'Gm', 'Ltr', 'Ml', 'Mtr', 'Sq ft', 'Box', 'Pack', 'Set', 'Pair', 'Dozen', 'Bag', 'Ton', 'Hrs', 'Days', 'Month', 'Job'];
@@ -62,7 +65,7 @@
     var inv = CFG.invoice || {}, base = { gst: inv.gst, unit: inv.unit, round: inv.round, accent: inv.accent, digits: inv.digits, fy: inv.fy };
     return Object.assign(base, CFG[type] || {});
   }
-  function taxOn(d) { return T.gstFlag ? d.withGst !== false : d.kind === 'tax'; }
+  function taxOn(d) { return T.alwaysTax || (T.gstFlag ? d.withGst !== false : d.kind === 'tax'); }
   function W() { return { doc: t('doc.' + type), docs: t('docs.' + type), Doc: t('Doc.' + type) }; }
   function tw(k, v) { return t(k, Object.assign(W(), v || {})); }
 
@@ -70,7 +73,7 @@
     var c = dset();
     return {
       type: type, kind: T.kind0 || (T.kinds.indexOf(c.kind) >= 0 ? c.kind : T.kinds[0]), no: '', deliv: '', orig: { no: '', date: '' }, reason: 'ret', tr: { veh: '', tname: '', lr: '' },
-      paper: c.paper || T.paper || 'a4', design: c.design || 'classic', copies: 1, date: NS.today(), due: '', pos: '', rc: false, ref: '',
+      paper: c.paper || T.paper || 'a4', design: c.design || 'classic', copies: 1, date: NS.today(), due: '', pos: '', rc: !!T.rcFixed, recv: '', ref: '',
       seller: { name: '', addr: '', city: '', pin: '', state: '', gstin: '', phone: '', email: '', logo: '', sign: '', bankName: '', bankAcc: '', bankIfsc: '', bankBranch: '', upi: '' },
       buyer: { name: '', addr: '', city: '', pin: '', state: '', gstin: '', phone: '' }, ship: null, einv: null, irn: null,
       items: [{ desc: '', hsn: '', qty: 1, unit: c.unit || 'Nos', rate: '', disc: '', gst: c.gst != null && c.gst !== '' ? +c.gst : 18 }],
@@ -158,11 +161,12 @@
         (T.due ? field('d-due', t('l.due'), { type: 'date' }) : '') +
         (T.valid ? field('d-valid', t('l.valid'), { type: 'date', hint: t('h.valid') }) : '') +
         (T.deliv ? field('d-deliv', t('l.deliv'), { type: 'date' }) : '') +
+        (T.recv ? field('d-recv', t('l.recv'), { type: 'date', hint: t('h.recv') }) : '') +
         (T.orig ? field('d-ono', t('l.ono'), { max: 16, ltr: 1, hint: t('h.ono') }) + field('d-odate', t('l.odate'), { type: 'date' }) +
           '<div class="f wide"><label for="d-reason">' + esc(t('l.reason')) + '</label><select id="d-reason">' + REASONS.map(function (k) { return '<option value="' + k + '">' + esc(t('rs.' + k)) + '</option>'; }).join('') + '</select></div>' : '') +
         field('d-pos', t('l.pos'), { type: 'state', hint: t(T.buying ? 'h.pos2' : 'h.pos') }) +
         field('d-ref', t('l.' + (T.refLbl || 'ref')), {}) +
-        (T.rc ? '<div class="f"><label class="chk"><input id="d-rc" type="checkbox"> ' + esc(t('l.rc')) + '</label></div>' : '') +
+        (T.rc && !T.rcFixed ? '<div class="f"><label class="chk"><input id="d-rc" type="checkbox"> ' + esc(t('l.rc')) + '</label></div>' : '') +
         (T.transport ? field('tr-veh', t('l.veh'), { ltr: 1, ph: 'PB10AB1234' }) + field('tr-tname', t('l.tname')) + field('tr-lr', t('l.lr'), { ltr: 1 }) : '') +
       '</div></fieldset>' +
 
@@ -248,7 +252,7 @@
   var SMAP = { 's-name': 'name', 's-addr': 'addr', 's-city': 'city', 's-pin': 'pin', 's-state': 'state', 's-gstin': 'gstin', 's-phone': 'phone', 's-email': 'email', 's-bankName': 'bankName', 's-bankAcc': 'bankAcc', 's-bankIfsc': 'bankIfsc', 's-bankBranch': 'bankBranch', 's-upi': 'upi' };
   var BMAP = { 'b-name': 'name', 'b-addr': 'addr', 'b-city': 'city', 'b-pin': 'pin', 'b-state': 'state', 'b-gstin': 'gstin', 'b-phone': 'phone' };
   var SHMAP = { 'sh-name': 'name', 'sh-addr': 'addr', 'sh-city': 'city', 'sh-pin': 'pin', 'sh-state': 'state' };
-  var DMAP = { 'd-kind': 'kind', 'd-no': 'no', 'd-date': 'date', 'd-due': 'due', 'd-valid': 'valid', 'd-deliv': 'deliv', 'd-pos': 'pos', 'd-ref': 'ref', 'd-notes': 'notes', 'd-terms': 'terms', 'd-status': 'status', 'd-copy': 'copyLabel',
+  var DMAP = { 'd-kind': 'kind', 'd-no': 'no', 'd-date': 'date', 'd-due': 'due', 'd-valid': 'valid', 'd-deliv': 'deliv', 'd-recv': 'recv', 'd-pos': 'pos', 'd-ref': 'ref', 'd-notes': 'notes', 'd-terms': 'terms', 'd-status': 'status', 'd-copy': 'copyLabel',
     'd-reason': 'reason', 'd-paper': 'paper', 'd-design': 'design', 'd-copies': 'copies' };
   var OMAP = { 'd-ono': 'no', 'd-odate': 'date' }, TRMAP = { 'tr-veh': 'veh', 'tr-tname': 'tname', 'tr-lr': 'lr' };
 
@@ -350,6 +354,7 @@
     if (T.due) x.push([P.due, NS.fmtDate(d.due)]);
     if (T.valid) x.push([P.valid, NS.fmtDate(d.valid)]);
     if (T.deliv && d.deliv) x.push([P.deliv, NS.fmtDate(d.deliv)]);
+    if (T.recv && d.recv) x.push([P.recv, NS.fmtDate(d.recv)]);
     if (T.purpose) x.push([P.purpose, P[d.kind]]);
     if (T.orig) { x.push([P.against, '<span class="mono">' + esc(o.no) + '</span>'], [P.invdate, NS.fmtDate(o.date)]); x.push([P.reason, P[RP[d.reason] || 'other']]); }
     x.push([P.pos, posCode ? esc(NS.stateName(posCode)) + ' (' + posCode + ')' : '']);
@@ -535,6 +540,8 @@
       if (!String((doc.orig || {}).no || '').trim() || !(doc.orig || {}).date) probs.push(['d-ono', t('v.orig')]);
       if (!String(doc.buyer.gstin || '').trim() && (!String(doc.buyer.addr || '').trim() || !doc.buyer.state)) probs.push([doc.buyer.addr ? 'b-state' : 'b-addr', t('v.naddr')]);
     }
+    if (type === 'self' && !doc.seller.gstin) probs.push(['s-gstin', t('v.sigst')]);
+    if (type === 'self' && !doc.recv) probs.push(['d-recv', t('v.recv')]);
     if (!doc.seller.name.trim()) probs.push(['s-name', t('v.bname')]);
     if (!tt.rows.length) probs.push(['it-desc-0', t('v.item')]);
     if (!String(doc.no).trim()) probs.push(['d-no', tw('v.no')]);
@@ -551,6 +558,7 @@
     var tt0 = totals(doc);
     if (!probs.length && taxOn(doc) && doc.date >= '2026-02-01' && type !== 'note' && tt0.rows.some(function (r) { return r.g === 28; }) && !confirm(t('c.r28'))) return Promise.reject(new Error('cancel'));
     if (!probs.length && type === 'cashmemo' && tt0.grand >= 200000 && !confirm(t('c.cash2l'))) return Promise.reject(new Error('cancel'));
+    if (!probs.length && type === 'self' && doc.recv && (new Date(doc.date) - new Date(doc.recv)) / 864e5 > 30 && !confirm(t('c.si30'))) return Promise.reject(new Error('cancel'));
     if (!probs.length && type === 'note' && doc.kind === 'credit' && doc.orig && doc.orig.date && doc.date > (+NS.fy(doc.orig.date).slice(0, 4) + 1) + '-11-30' && !confirm(t('c.cn30'))) return Promise.reject(new Error('cancel'));
     if (probs.length) {
       var p = probs[0], f = $('#' + p[0], root);
@@ -668,7 +676,7 @@
   }
   /* the English name used in file names and shared messages */
   var NAMES = { tax: 'Invoice', supply: 'Bill of Supply', plain: 'Invoice', quote: 'Quotation', estimate: 'Estimate', proforma: 'Proforma Invoice', so: 'Sales Order', challan: 'Delivery Challan',
-    po: 'Purchase Order', credit: 'Credit Note', debit: 'Debit Note', cashmemo: 'Cash Memo' };
+    po: 'Purchase Order', credit: 'Credit Note', debit: 'Debit Note', cashmemo: 'Cash Memo', self: 'Self Invoice' };
   function docName() { return NAMES[T.title || doc.kind] || 'Invoice'; }
   function fileName() { return docName() + ' ' + (doc.no || '') + (doc.buyer.name ? ' - ' + doc.buyer.name : ''); }
   function shareText() {
