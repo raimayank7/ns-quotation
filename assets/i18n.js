@@ -260,7 +260,7 @@
     });
     var ALT = window.NS_ALT || {}, pageLang = document.documentElement.getAttribute('data-page-lang') || 'en';
     var saved; try { saved = localStorage.getItem('ns-lang'); } catch (e) {}
-    if (pageLang === 'en' && saved && saved !== 'en' && ALT[saved] && ALT[saved] !== location.pathname) { location.replace(ALT[saved]); return Promise.resolve(); }
+    if (pageLang === 'en' && saved && saved !== 'en' && ALT[saved] && ALT[saved] !== location.pathname) { location.replace(ALT[saved] + location.search + location.hash); return Promise.resolve(); }
     var first = NS.setLang(pageLang !== 'en' ? pageLang : (saved || guess()), true);
     /* the language chosen on any Nivesh Sahayak tool is shared through the data home */
     if (!saved && window.NSStore) NSStore.ready().then(function () { return NSStore.meta('lang'); }).then(function (l) { if (l && l !== cur) NS.setLang(l, true); }).catch(function () {});
