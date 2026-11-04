@@ -17,10 +17,10 @@
     proforma: { prefix: 'PI', kinds: ['proforma'], valid: true, gstFlag: true, qr: true, status: ['open', 'acc', 'dec', 'inv'], toInvoice: true, noLbl: 'pno', party: 'billto', note: 'pnote', refLbl: 'qref' },
     so: { prefix: 'SO', kinds: ['so'], deliv: true, gstFlag: true, status: ['sopen', 'spart', 'sdone', 'inv', 'scan'], toInvoice: true, noLbl: 'sono', party: 'billto', refLbl: 'poref' },
     challan: { prefix: 'DC', kinds: ['job', 'approval', 'sale', 'transfer', 'other'], title: 'challan', purpose: true, transport: true, gstFlag: true, gstOff: true, copy: 'dc',
-      status: ['dsent', 'dret', 'inv'], toInvoice: true, noLbl: 'dcno', party: 'consignee', note: 'dcnote', refLbl: 'ref' },
+      status: ['dsent', 'dret', 'inv'], toInvoice: true, noLbl: 'dcno', party: 'consignee', note: { job: 'dcjob', approval: 'dcnote', sale: 'dcnote', transfer: 'dcnote', other: 'dcnote' }, refLbl: 'ref' },
     po: { prefix: 'PO', kinds: ['po'], deliv: true, gstFlag: true, status: ['popen', 'prec', 'scan'], noLbl: 'pono', party: 'vendor', shipLbl: 'deliverto', refLbl: 'vqref', buying: true },
     note: { prefix: 'CN', prefixes: { credit: 'CN', debit: 'DN' }, kinds: ['credit', 'debit'], orig: true, gstFlag: true, copy: 'note', status: ['nissued', 'nadj', 'nref'],
-      noLbl: { credit: 'cnno', debit: 'dnno' }, party: 'issuedto', refLbl: 'ref' },
+      noLbl: { credit: 'cnno', debit: 'dnno' }, party: 'issuedto', note: { credit: 'cnnote', debit: 'dnnote' }, refLbl: 'ref' },
     cashmemo: { prefix: 'CM', kinds: ['cashmemo'], gstFlag: true, gstOff: true, qr: true, pay: true, paidFirst: true, noLbl: 'cmno', party: 'custto', paper: 'th80' }
   };
   var COPIES = { inv: ['orig', 'dup', 'trip'], invs: ['orig', 'dupsup'], dc: ['dcorig', 'dcdup', 'dctrip'], note: ['orig', 'dupsup'] };
@@ -31,10 +31,11 @@
 
   /* words printed on the document (English only, readable by every buyer, bank and tax officer) */
   var P = { tax: 'TAX INVOICE', supply: 'BILL OF SUPPLY', plain: 'INVOICE', no: 'Invoice No.', date: 'Date', due: 'Due date', pos: 'Place of supply', rc: 'Reverse charge', ref: 'Order ref.', billto: 'Bill to', shipto: 'Ship to', gstin: 'GSTIN', ph: 'Phone', item: 'Item / service', hsn: 'HSN/SAC', qty: 'Qty', rate: 'Rate', disc: 'Disc.', taxable: 'Taxable value', gst: 'GST', amount: 'Amount', subtotal: 'Taxable value', cgst: 'CGST', sgst: 'SGST', igst: 'IGST', round: 'Round off', total: 'Total', words: 'Amount in words', summary: 'Tax summary', bank: 'Bank details', acc: 'A/c no.', ifsc: 'IFSC', branch: 'Branch', upi: 'Scan to pay by UPI', notes: 'Notes', terms: 'Terms and conditions', for: 'For', sign: 'Authorised signatory', yes: 'Yes', no2: 'No', supplynote: 'Composition taxable person, not eligible to collect tax on supplies.', quote: 'QUOTATION', estimate: 'ESTIMATE', qno: 'Quotation No.', eno: 'Estimate No.', valid: 'Valid until', qref: 'Enquiry ref.', qfor: 'Quotation for', efor: 'Estimate for', price: 'Amount', qnote: 'This is a quotation, not a tax invoice.', enote: 'This is an estimate. The final bill may differ.', paid: 'PAID', orig: 'Original for recipient', dup: 'Duplicate for transporter', trip: 'Triplicate for supplier',
-    proforma: 'PROFORMA INVOICE', pno: 'Proforma No.', pnote: 'This is a proforma invoice, not a tax invoice. A tax invoice will be issued on supply.',
+    proforma: 'PROFORMA INVOICE', pno: 'Proforma No.', pnote: 'Not a tax invoice. No input tax credit can be claimed on it. A tax invoice will be issued on supply.',
     so: 'SALES ORDER', sono: 'Order No.', poref: 'Customer PO ref.', deliv: 'Delivery by',
     challan: 'DELIVERY CHALLAN', dcno: 'Challan No.', consignee: 'Consignee (deliver to)', purpose: 'Purpose', job: 'Job work', approval: 'Supply on approval', sale: 'Sale (invoice to follow)', transfer: 'Branch / stock transfer', other: 'Other',
-    dcnote: 'Goods sent under this delivery challan. Not a tax invoice.', dcorig: 'Original for consignee', dcdup: 'Duplicate for transporter', dctrip: 'Triplicate for consignor',
+    dcnote: 'Goods sent under this delivery challan. Not a tax invoice.', dcjob: 'Goods sent for job work under this delivery challan. Not a tax invoice. Moving them to another state needs an e-way bill at any value.',
+    cnnote: 'Credit note under section 34 of the CGST Act. The recipient must reverse the matching input tax credit.', dnnote: 'Debit note under section 34 of the CGST Act.', dcorig: 'Original for consignee', dcdup: 'Duplicate for transporter', dctrip: 'Triplicate for consignor',
     veh: 'Vehicle No.', tname: 'Transporter', lr: 'LR / docket No.', value: 'Value',
     po: 'PURCHASE ORDER', pono: 'PO No.', vendor: 'Vendor (order to)', deliverto: 'Deliver to', vqref: 'Vendor quotation ref.', buyer: 'Buyer',
     credit: 'CREDIT NOTE', debit: 'DEBIT NOTE', cnno: 'Credit Note No.', dnno: 'Debit Note No.', issuedto: 'Issued to', against: 'Against invoice', invdate: 'Invoice date', reason: 'Reason',
@@ -530,6 +531,10 @@
       else if (!String(doc.buyer.addr || '').trim()) probs.push(['b-addr', t('v.b2c')]);
       else if (!doc.buyer.state) probs.push(['b-state', t('v.b2c')]);
     }
+    if (type === 'note') {
+      if (!String((doc.orig || {}).no || '').trim() || !(doc.orig || {}).date) probs.push(['d-ono', t('v.orig')]);
+      if (!String(doc.buyer.gstin || '').trim() && (!String(doc.buyer.addr || '').trim() || !doc.buyer.state)) probs.push([doc.buyer.addr ? 'b-state' : 'b-addr', t('v.naddr')]);
+    }
     if (!doc.seller.name.trim()) probs.push(['s-name', t('v.bname')]);
     if (!tt.rows.length) probs.push(['it-desc-0', t('v.item')]);
     if (!String(doc.no).trim()) probs.push(['d-no', tw('v.no')]);
@@ -546,6 +551,7 @@
     var tt0 = totals(doc);
     if (!probs.length && taxOn(doc) && doc.date >= '2026-02-01' && type !== 'note' && tt0.rows.some(function (r) { return r.g === 28; }) && !confirm(t('c.r28'))) return Promise.reject(new Error('cancel'));
     if (!probs.length && type === 'cashmemo' && tt0.grand >= 200000 && !confirm(t('c.cash2l'))) return Promise.reject(new Error('cancel'));
+    if (!probs.length && type === 'note' && doc.kind === 'credit' && doc.orig && doc.orig.date && doc.date > (+NS.fy(doc.orig.date).slice(0, 4) + 1) + '-11-30' && !confirm(t('c.cn30'))) return Promise.reject(new Error('cancel'));
     if (probs.length) {
       var p = probs[0], f = $('#' + p[0], root);
       NS.toast(p[1], 'bad');
