@@ -23,7 +23,7 @@
       noLbl: { credit: 'cnno', debit: 'dnno' }, party: 'issuedto', refLbl: 'ref' },
     cashmemo: { prefix: 'CM', kinds: ['cashmemo'], gstFlag: true, gstOff: true, qr: true, pay: true, paidFirst: true, noLbl: 'cmno', party: 'custto', paper: 'th80' }
   };
-  var COPIES = { inv: ['orig', 'dup', 'trip'], dc: ['dcorig', 'dcdup', 'dctrip'], note: ['orig', 'dupsup'] };
+  var COPIES = { inv: ['orig', 'dup', 'trip'], invs: ['orig', 'dupsup'], dc: ['dcorig', 'dcdup', 'dctrip'], note: ['orig', 'dupsup'] };
   var REASONS = ['ret', 'price', 'disc', 'short', 'tax', 'other'];
   var PAPERS = ['a4', 'a5', 'th80', 'th58'], DESIGNS = ['classic', 'modern', 'compact'];
   function pk(v, kind) { return v && typeof v === 'object' ? v[kind] : v; }
@@ -43,7 +43,12 @@
   /* reason codes print through RP (P.tax is the invoice title, so the "tax corrected" reason has its own word) */
   var RP = { ret: 'ret', price: 'price', disc: 'disc2', 'short': 'short', tax: 'taxfix', other: 'other' };
   var UNITS = ['Nos', 'Pcs', 'Kg', 'Gm', 'Ltr', 'Ml', 'Mtr', 'Sq ft', 'Box', 'Pack', 'Set', 'Pair', 'Dozen', 'Bag', 'Ton', 'Hrs', 'Days', 'Month', 'Job'];
-  var RATES = [0, 0.25, 3, 5, 12, 18, 28, 40];
+  /* GST rates offered for the document date (Tax research area 1): 5/18/40 slabs from 22 Sep 2025 (Notif. 9/2025-CT(Rate)),
+     28% omitted from 1 Feb 2026 (19/2025-CT(Rate)); 12% still for bricks/tiles; 1.5% cut diamonds; 0.1% merchant exporters.
+     Any other rate can still be typed. */
+  var RATE_SETS = [['2026-02-01', [0, 0.1, 0.25, 1.5, 3, 5, 12, 18, 40]], ['2025-09-22', [0, 0.1, 0.25, 1.5, 3, 5, 12, 18, 28, 40]], ['', [0, 0.1, 0.25, 3, 5, 12, 18, 28]]];
+  function ratesFor(date) { return RATE_SETS.filter(function (r) { return String(date || '') >= r[0]; })[0][1]; }
+  function rateOpts(date) { return ratesFor(date).map(function (u) { return '<option value="' + u + '">'; }).join(''); }
   var ACCENTS = ['#0B3B5B', '#1D4ED8', '#047857', '#B45309', '#9D174D', '#334155'];
   var UT = { '04': 1, '26': 1, '31': 1, '35': 1, '38': 1 }; /* Union Territories without a legislature charge UTGST */
 
@@ -175,15 +180,15 @@
       '<fieldset class="card"><legend>' + esc(t('lg.items')) + '</legend><div id="items" class="items"></div>' +
         '<button type="button" class="btn" id="add-item">' + esc(t('add.item')) + '</button>' +
         '<datalist id="dl-units">' + UNITS.map(function (u) { return '<option value="' + u + '">'; }).join('') + '</datalist>' +
-        '<datalist id="dl-rates">' + RATES.map(function (u) { return '<option value="' + u + '">'; }).join('') + '</datalist>' +
+        '<datalist id="dl-rates">' + rateOpts(doc.date) + '</datalist>' +
         '<div class="sums" id="ed-sums" aria-live="polite"></div>' +
       '</fieldset>' +
 
       '<fieldset class="card"><legend>' + esc(t('lg.notes')) + '</legend><div class="fg">' +
         field('d-notes', t('l.notes'), { type: 'textarea', wide: true, ph: t('ph.notes') }) +
         field('d-terms', t('l.terms'), { type: 'textarea', wide: true, ph: t(T.valid ? 'ph.qterms' : T.buying ? 'ph.poterms' : T.purpose ? 'ph.dcterms' : 'ph.terms') }) +
-        (T.copy ? '<div class="f"><label for="d-copy">' + esc(t('l.copy')) + '</label><select id="d-copy">' + COPIES[T.copy].map(function (k) { return '<option value="' + k + '">' + esc(t('cp.' + k)) + '</option>'; }).join('') + '<option value="">' + esc(t('cp.none')) + '</option></select></div>' +
-          '<div class="f"><label for="d-copies">' + esc(t('l.copies')) + '</label><select id="d-copies">' + COPIES[T.copy].map(function (k, i) { return '<option value="' + (i + 1) + '">' + esc(t(i ? 'cps.n' : 'cps.1', { n: i + 1 })) + '</option>'; }).join('') + '</select><small class="hint">' + esc(t('h.copies')) + '</small></div>' : '') +
+        (T.copy ? '<div class="f"><label for="d-copy">' + esc(t('l.copy')) + '</label><select id="d-copy">' + COPIES[copyKey()].map(function (k) { return '<option value="' + k + '">' + esc(t('cp.' + k)) + '</option>'; }).join('') + '<option value="">' + esc(t('cp.none')) + '</option></select></div>' +
+          '<div class="f"><label for="d-copies">' + esc(t('l.copies')) + '</label><select id="d-copies">' + COPIES[copyKey()].map(function (k, i) { return '<option value="' + (i + 1) + '">' + esc(t(i ? 'cps.n' : 'cps.1', { n: i + 1 })) + '</option>'; }).join('') + '</select><small class="hint">' + esc(t('h.copies')) + '</small></div>' : '') +
         '<div class="f"><label for="d-paper">' + esc(t('l.paper')) + '</label><select id="d-paper">' + PAPERS.map(function (k) { return '<option value="' + k + '">' + esc(t('pp.' + k)) + '</option>'; }).join('') + '</select></div>' +
         '<div class="f"><label for="d-design">' + esc(t('l.design')) + '</label><select id="d-design">' + DESIGNS.map(function (k, i) { return '<option value="' + k + '">' + esc(t('ds.' + k)) + (i ? ' · ' + esc(t('pkg')) : '') + '</option>'; }).join('') + '</select><small class="hint">' + esc(t('h.design')) + '</small></div>' +
         (T.pay ? '<div class="f"><label for="d-status">' + esc(t('l.pay')) + '</label><select id="d-status"><option value="unpaid">' + esc(t('pay.unpaid')) + '</option><option value="paid">' + esc(t('pay.paid')) + '</option></select></div>'
@@ -204,6 +209,7 @@
     });
     NS.suggest($('#s-name', ed), function () { return NSStore.list('biz'); }, function (x) { return x.name; }, function (b) {
       doc.seller = Object.assign(blank().seller, b); delete doc.seller.id; delete doc.seller.created; delete doc.seller.updated;
+      regKind();
       fillForm(); suggestNumber(true); draw(); saveDraft();
     });
     NS.suggest($('#b-name', ed), function () { return NSStore.list('party'); }, function (x) { return x.name; }, function (p) {
@@ -299,6 +305,8 @@
     }
     if (id === 'd-kind') { fillForm(true); if (T.prefixes && !editingId) suggestNumber(false); }
     if (id === 'd-date' && e.type === 'change') suggestNumber(false);
+    if (id === 'd-date') { var dl = $('#dl-rates', root); if (dl) dl.innerHTML = rateOpts(doc.date); }
+    if (el.getAttribute('data-k') === 'hsn' && T.copy === 'inv') syncCopies();
     draw(); saveDraft();
   }
 
@@ -423,10 +431,25 @@
       (d.notes ? '<p class="nt1">' + esc(d.notes).replace(/\n/g, '<br>') + '</p>' : '') +
       (type === 'cashmemo' ? '<p class="thanks">' + P.thanks + '</p>' : '') + made() + '</div>';
   }
+  /* an invoice of services only (every HSN/SAC starts with 99) is made in duplicate: Original for recipient, Duplicate for supplier (Rule 48) */
+  function copyKey() {
+    if (T.copy !== 'inv' || !doc) return T.copy;
+    var h = doc.items.map(function (it) { return String(it.hsn || '').replace(/\D/g, ''); }).filter(Boolean);
+    return h.length && h.every(function (x) { return /^99/.test(x); }) ? 'invs' : 'inv';
+  }
+  function syncCopies() {
+    var sel = $('#d-copy', root), set = COPIES[copyKey()];
+    if (!sel || !set) return;
+    if (doc.copyLabel && set.indexOf(doc.copyLabel) < 0) doc.copyLabel = set[set.indexOf('dupsup') >= 0 && doc.copyLabel !== 'orig' ? 1 : 0];
+    sel.innerHTML = set.map(function (k) { return '<option value="' + k + '">' + esc(t('cp.' + k)) + '</option>'; }).join('') + '<option value="">' + esc(t('cp.none')) + '</option>';
+    sel.value = doc.copyLabel || '';
+    var n = $('#d-copies', root);
+    if (n) { var v = Math.min(+doc.copies || 1, set.length); n.innerHTML = set.map(function (k, i) { return '<option value="' + (i + 1) + '">' + esc(t(i ? 'cps.n' : 'cps.1', { n: i + 1 })) + '</option>'; }).join(''); n.value = String(v); doc.copies = v; }
+  }
   /* print copies: 1 = the chosen label; 2 or 3 = Original, Duplicate (and Triplicate) one after another */
   function labelsFor(d, all) {
     var n = +d.copies || 1;
-    return T.copy && d.copyLabel && all && n > 1 ? COPIES[T.copy].slice(0, n) : [d.copyLabel];
+    return T.copy && d.copyLabel && all && n > 1 ? COPIES[copyKey()].slice(0, n) : [d.copyLabel];
   }
   function draw(all) {
     if (!sheet) return;
@@ -494,8 +517,19 @@
       return NSStore.put(store, Object.assign(hit || {}, obj));
     });
   }
+  function regKind() {
+    if (T.kinds.indexOf('supply') < 0) return;
+    if (doc.seller.reg === 'comp') { doc.kind = 'supply'; doc.comp = true; }
+    else if (doc.seller.reg === 'unreg') doc.kind = 'plain';
+  }
   function validate() {
     var tt = totals(doc), probs = [];
+    /* Rule 46(e): an unregistered buyer's name, address and state when the taxable value is Rs 50,000 or more */
+    if ((type === 'invoice' || type === 'cashmemo') && !String(doc.buyer.gstin || '').trim() && tt.taxable >= 50000) {
+      if (!String(doc.buyer.name || '').trim()) probs.push(['b-name', t('v.b2c')]);
+      else if (!String(doc.buyer.addr || '').trim()) probs.push(['b-addr', t('v.b2c')]);
+      else if (!doc.buyer.state) probs.push(['b-state', t('v.b2c')]);
+    }
     if (!doc.seller.name.trim()) probs.push(['s-name', t('v.bname')]);
     if (!tt.rows.length) probs.push(['it-desc-0', t('v.item')]);
     if (!String(doc.no).trim()) probs.push(['d-no', tw('v.no')]);
@@ -509,6 +543,9 @@
   }
   function save() {
     var probs = validate();
+    var tt0 = totals(doc);
+    if (!probs.length && taxOn(doc) && doc.date >= '2026-02-01' && type !== 'note' && tt0.rows.some(function (r) { return r.g === 28; }) && !confirm(t('c.r28'))) return Promise.reject(new Error('cancel'));
+    if (!probs.length && type === 'cashmemo' && tt0.grand >= 200000 && !confirm(t('c.cash2l'))) return Promise.reject(new Error('cancel'));
     if (probs.length) {
       var p = probs[0], f = $('#' + p[0], root);
       NS.toast(p[1], 'bad');
