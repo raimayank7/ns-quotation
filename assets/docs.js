@@ -5,15 +5,43 @@
   'use strict';
   var $ = NS.$, $$ = NS.$$, esc = NS.esc, num = NS.num, r2 = NS.r2, t = NS.t;
 
+  /* every item-based document. Keys used below:
+     kinds (first = default; data-kind on #tool can pick another), prefix/prefixes (number series), title (fixed printed title, else P[kind]),
+     noLbl/party/note (P keys, one for all or per kind), refLbl, due/valid/deliv (dates), orig (against invoice no. + date), purpose + transport (challan),
+     gstFlag (GST shown or not; gstOff = off by default), copy (copy-label set), pay (paid/not paid) or status list, toInvoice, qr (UPI QR), paper (default paper) */
   var TYPES = {
-    invoice: { prefix: 'INV', kinds: ['tax', 'supply', 'plain'], due: true, copy: true, rc: true, qr: true, pay: true },
+    invoice: { prefix: 'INV', kinds: ['tax', 'supply', 'plain'], due: true, copy: 'inv', rc: true, qr: true, pay: true },
     /* quotation site: two kinds with their own number series, GST shown or not, a validity date, and "Make invoice" */
-    quote: { prefix: 'QT', prefixes: { quote: 'QT', estimate: 'EST' }, kinds: ['quote', 'estimate'], valid: true, gstFlag: true, status: ['open', 'acc', 'dec', 'inv'], toInvoice: true }
+    quote: { prefix: 'QT', prefixes: { quote: 'QT', estimate: 'EST' }, kinds: ['quote', 'estimate'], valid: true, gstFlag: true, status: ['open', 'acc', 'dec', 'inv'], toInvoice: true,
+      noLbl: { quote: 'qno', estimate: 'eno' }, party: { quote: 'qfor', estimate: 'efor' }, note: { quote: 'qnote', estimate: 'enote' }, refLbl: 'qref', priceCol: true, qterms: true },
+    proforma: { prefix: 'PI', kinds: ['proforma'], valid: true, gstFlag: true, qr: true, status: ['open', 'acc', 'dec', 'inv'], toInvoice: true, noLbl: 'pno', party: 'billto', note: 'pnote', refLbl: 'qref' },
+    so: { prefix: 'SO', kinds: ['so'], deliv: true, gstFlag: true, status: ['sopen', 'spart', 'sdone', 'inv', 'scan'], toInvoice: true, noLbl: 'sono', party: 'billto', refLbl: 'poref' },
+    challan: { prefix: 'DC', kinds: ['job', 'approval', 'sale', 'transfer', 'other'], title: 'challan', purpose: true, transport: true, gstFlag: true, gstOff: true, copy: 'dc',
+      status: ['dsent', 'dret', 'inv'], toInvoice: true, noLbl: 'dcno', party: 'consignee', note: 'dcnote', refLbl: 'ref' },
+    po: { prefix: 'PO', kinds: ['po'], deliv: true, gstFlag: true, status: ['popen', 'prec', 'scan'], noLbl: 'pono', party: 'vendor', shipLbl: 'deliverto', refLbl: 'vqref', buying: true },
+    note: { prefix: 'CN', prefixes: { credit: 'CN', debit: 'DN' }, kinds: ['credit', 'debit'], orig: true, gstFlag: true, copy: 'note', status: ['nissued', 'nadj', 'nref'],
+      noLbl: { credit: 'cnno', debit: 'dnno' }, party: 'issuedto', refLbl: 'ref' },
+    cashmemo: { prefix: 'CM', kinds: ['cashmemo'], gstFlag: true, gstOff: true, qr: true, pay: true, paidFirst: true, noLbl: 'cmno', party: 'custto', paper: 'th80' }
   };
+  var COPIES = { inv: ['orig', 'dup', 'trip'], dc: ['dcorig', 'dcdup', 'dctrip'], note: ['orig', 'dupsup'] };
+  var REASONS = ['ret', 'price', 'disc', 'short', 'tax', 'other'];
+  var PAPERS = ['a4', 'a5', 'th80', 'th58'], DESIGNS = ['classic', 'modern', 'compact'];
+  function pk(v, kind) { return v && typeof v === 'object' ? v[kind] : v; }
   var BILLING = /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? 'http://localhost:8861/' : 'https://billing.niveshsahayak.in/';
 
   /* words printed on the document (English only, readable by every buyer, bank and tax officer) */
-  var P = { tax: 'TAX INVOICE', supply: 'BILL OF SUPPLY', plain: 'INVOICE', no: 'Invoice No.', date: 'Date', due: 'Due date', pos: 'Place of supply', rc: 'Reverse charge', ref: 'Order ref.', billto: 'Bill to', shipto: 'Ship to', gstin: 'GSTIN', ph: 'Phone', item: 'Item / service', hsn: 'HSN/SAC', qty: 'Qty', rate: 'Rate', disc: 'Disc.', taxable: 'Taxable value', gst: 'GST', amount: 'Amount', subtotal: 'Taxable value', cgst: 'CGST', sgst: 'SGST', igst: 'IGST', round: 'Round off', total: 'Total', words: 'Amount in words', summary: 'Tax summary', bank: 'Bank details', acc: 'A/c no.', ifsc: 'IFSC', branch: 'Branch', upi: 'Scan to pay by UPI', notes: 'Notes', terms: 'Terms and conditions', for: 'For', sign: 'Authorised signatory', yes: 'Yes', no2: 'No', supplynote: 'Composition taxable person, not eligible to collect tax on supplies.', quote: 'QUOTATION', estimate: 'ESTIMATE', qno: 'Quotation No.', eno: 'Estimate No.', valid: 'Valid until', qref: 'Enquiry ref.', qfor: 'Quotation for', efor: 'Estimate for', price: 'Amount', qnote: 'This is a quotation, not a tax invoice.', enote: 'This is an estimate. The final bill may differ.', paid: 'PAID', orig: 'Original for recipient', dup: 'Duplicate for transporter', trip: 'Triplicate for supplier' };
+  var P = { tax: 'TAX INVOICE', supply: 'BILL OF SUPPLY', plain: 'INVOICE', no: 'Invoice No.', date: 'Date', due: 'Due date', pos: 'Place of supply', rc: 'Reverse charge', ref: 'Order ref.', billto: 'Bill to', shipto: 'Ship to', gstin: 'GSTIN', ph: 'Phone', item: 'Item / service', hsn: 'HSN/SAC', qty: 'Qty', rate: 'Rate', disc: 'Disc.', taxable: 'Taxable value', gst: 'GST', amount: 'Amount', subtotal: 'Taxable value', cgst: 'CGST', sgst: 'SGST', igst: 'IGST', round: 'Round off', total: 'Total', words: 'Amount in words', summary: 'Tax summary', bank: 'Bank details', acc: 'A/c no.', ifsc: 'IFSC', branch: 'Branch', upi: 'Scan to pay by UPI', notes: 'Notes', terms: 'Terms and conditions', for: 'For', sign: 'Authorised signatory', yes: 'Yes', no2: 'No', supplynote: 'Composition taxable person, not eligible to collect tax on supplies.', quote: 'QUOTATION', estimate: 'ESTIMATE', qno: 'Quotation No.', eno: 'Estimate No.', valid: 'Valid until', qref: 'Enquiry ref.', qfor: 'Quotation for', efor: 'Estimate for', price: 'Amount', qnote: 'This is a quotation, not a tax invoice.', enote: 'This is an estimate. The final bill may differ.', paid: 'PAID', orig: 'Original for recipient', dup: 'Duplicate for transporter', trip: 'Triplicate for supplier',
+    proforma: 'PROFORMA INVOICE', pno: 'Proforma No.', pnote: 'This is a proforma invoice, not a tax invoice. A tax invoice will be issued on supply.',
+    so: 'SALES ORDER', sono: 'Order No.', poref: 'Customer PO ref.', deliv: 'Delivery by',
+    challan: 'DELIVERY CHALLAN', dcno: 'Challan No.', consignee: 'Consignee (deliver to)', purpose: 'Purpose', job: 'Job work', approval: 'Supply on approval', sale: 'Sale (invoice to follow)', transfer: 'Branch / stock transfer', other: 'Other',
+    dcnote: 'Goods sent under this delivery challan. Not a tax invoice.', dcorig: 'Original for consignee', dcdup: 'Duplicate for transporter', dctrip: 'Triplicate for consignor',
+    veh: 'Vehicle No.', tname: 'Transporter', lr: 'LR / docket No.', value: 'Value',
+    po: 'PURCHASE ORDER', pono: 'PO No.', vendor: 'Vendor (order to)', deliverto: 'Deliver to', vqref: 'Vendor quotation ref.', buyer: 'Buyer',
+    credit: 'CREDIT NOTE', debit: 'DEBIT NOTE', cnno: 'Credit Note No.', dnno: 'Debit Note No.', issuedto: 'Issued to', against: 'Against invoice', invdate: 'Invoice date', reason: 'Reason',
+    ret: 'Goods returned', price: 'Price changed', disc2: 'Discount after sale', short: 'Short or damaged supply', taxfix: 'Tax corrected',
+    dupsup: 'Duplicate for supplier', cashmemo: 'CASH MEMO', cmno: 'Memo No.', custto: 'Customer', cash: 'Cash', thanks: 'Thank you, visit again', recd: 'Goods received in good condition', recdsign: 'Receiver’s sign, name and date', items: 'Items', page: 'Page' };
+  /* reason codes print through RP (P.tax is the invoice title, so the "tax corrected" reason has its own word) */
+  var RP = { ret: 'ret', price: 'price', disc: 'disc2', 'short': 'short', tax: 'taxfix', other: 'other' };
   var UNITS = ['Nos', 'Pcs', 'Kg', 'Gm', 'Ltr', 'Ml', 'Mtr', 'Sq ft', 'Box', 'Pack', 'Set', 'Pair', 'Dozen', 'Bag', 'Ton', 'Hrs', 'Days', 'Month', 'Job'];
   var RATES = [0, 0.25, 3, 5, 12, 18, 28, 40];
   var ACCENTS = ['#0B3B5B', '#1D4ED8', '#047857', '#B45309', '#9D174D', '#334155'];
@@ -25,7 +53,7 @@
   function dset() {
     if (type === 'invoice') return CFG.invoice || {};
     /* the invoice defaults (GST rate, unit, colour, round off) also serve the other documents */
-    var inv = CFG.invoice || {}, base = { gst: inv.gst, unit: inv.unit, round: inv.round, accent: inv.accent };
+    var inv = CFG.invoice || {}, base = { gst: inv.gst, unit: inv.unit, round: inv.round, accent: inv.accent, digits: inv.digits, fy: inv.fy };
     return Object.assign(base, CFG[type] || {});
   }
   function taxOn(d) { return T.gstFlag ? d.withGst !== false : d.kind === 'tax'; }
@@ -35,12 +63,13 @@
   function blank() {
     var c = dset();
     return {
-      type: type, kind: c.kind || T.kinds[0], no: '', date: NS.today(), due: '', pos: '', rc: false, ref: '',
+      type: type, kind: T.kind0 || (T.kinds.indexOf(c.kind) >= 0 ? c.kind : T.kinds[0]), no: '', deliv: '', orig: { no: '', date: '' }, reason: 'ret', tr: { veh: '', tname: '', lr: '' },
+      paper: c.paper || T.paper || 'a4', design: c.design || 'classic', copies: 1, date: NS.today(), due: '', pos: '', rc: false, ref: '',
       seller: { name: '', addr: '', city: '', pin: '', state: '', gstin: '', phone: '', email: '', logo: '', sign: '', bankName: '', bankAcc: '', bankIfsc: '', bankBranch: '', upi: '' },
       buyer: { name: '', addr: '', city: '', pin: '', state: '', gstin: '', phone: '' }, ship: null, einv: null, irn: null,
       items: [{ desc: '', hsn: '', qty: 1, unit: c.unit || 'Nos', rate: '', disc: '', gst: c.gst != null && c.gst !== '' ? +c.gst : 18 }],
       round: c.round !== false, comp: true, notes: c.notes || '', terms: c.terms || '', accent: c.accent || ACCENTS[0],
-      status: T.status ? T.status[0] : 'unpaid', copyLabel: T.copy ? 'orig' : '', withGst: T.gstFlag ? true : undefined, valid: ''
+      status: T.status ? T.status[0] : T.paidFirst ? 'paid' : 'unpaid', copyLabel: T.copy ? COPIES[T.copy][0] : '', withGst: T.gstFlag ? !T.gstOff : undefined, valid: ''
     };
   }
 
@@ -115,20 +144,24 @@
       '</div></details></fieldset>' +
 
       '<fieldset class="card"><legend>' + esc(tw('lg.details')) + '</legend><div class="fg">' +
-        '<div class="f wide"><label for="d-kind">' + esc(t('l.type')) + '</label><select id="d-kind">' + T.kinds.map(function (k) { return '<option value="' + k + '">' + esc(t('k.' + k)) + '</option>'; }).join('') + '</select><small class="hint" id="kind-hint"></small></div>' +
+        '<div class="f wide"' + (T.kinds.length < 2 ? ' hidden' : '') + '><label for="d-kind">' + esc(t(T.purpose ? 'l.purpose' : 'l.type')) + '</label><select id="d-kind">' + T.kinds.map(function (k) { return '<option value="' + k + '">' + esc(t('k.' + k)) + '</option>'; }).join('') + '</select><small class="hint" id="kind-hint"></small></div>' +
         (T.gstFlag ? '<div class="f wide"><label class="chk"><input id="d-gst" type="checkbox"> ' + esc(t('l.withgst')) + '</label><small class="hint">' + esc(t('h.withgst')) + '</small></div>' : '') +
         '<div class="f wide" id="comp-box" hidden><label class="chk"><input id="d-comp" type="checkbox"> ' + esc(t('comp')) + '</label></div>' +
-        field('d-no', tw('l.no'), { max: 16, hint: T.valid ? t('h.qno') : t('h.no'), ltr: 1 }) +
+        field('d-no', tw('l.no'), { max: 16, hint: type === 'quote' ? t('h.qno') : type === 'invoice' ? t('h.no') : T.prefixes ? t('h.no3') : t('h.no2'), ltr: 1 }) +
         field('d-date', t('l.date'), { type: 'date' }) +
         (T.due ? field('d-due', t('l.due'), { type: 'date' }) : '') +
         (T.valid ? field('d-valid', t('l.valid'), { type: 'date', hint: t('h.valid') }) : '') +
-        field('d-pos', t('l.pos'), { type: 'state', hint: t('h.pos') }) +
-        field('d-ref', T.valid ? t('l.qref') : t('l.ref'), {}) +
+        (T.deliv ? field('d-deliv', t('l.deliv'), { type: 'date' }) : '') +
+        (T.orig ? field('d-ono', t('l.ono'), { max: 16, ltr: 1, hint: t('h.ono') }) + field('d-odate', t('l.odate'), { type: 'date' }) +
+          '<div class="f wide"><label for="d-reason">' + esc(t('l.reason')) + '</label><select id="d-reason">' + REASONS.map(function (k) { return '<option value="' + k + '">' + esc(t('rs.' + k)) + '</option>'; }).join('') + '</select></div>' : '') +
+        field('d-pos', t('l.pos'), { type: 'state', hint: t(T.buying ? 'h.pos2' : 'h.pos') }) +
+        field('d-ref', t('l.' + (T.refLbl || 'ref')), {}) +
         (T.rc ? '<div class="f"><label class="chk"><input id="d-rc" type="checkbox"> ' + esc(t('l.rc')) + '</label></div>' : '') +
+        (T.transport ? field('tr-veh', t('l.veh'), { ltr: 1, ph: 'PB10AB1234' }) + field('tr-tname', t('l.tname')) + field('tr-lr', t('l.lr'), { ltr: 1 }) : '') +
       '</div></fieldset>' +
 
-      '<fieldset class="card"><legend>' + esc(t(T.valid ? 'lg.qto' : 'lg.billto')) + '</legend><div class="fg">' +
-        field('b-name', t('l.cname'), { ph: t('ph.cname'), wide: true, hint: t('h.cname') }) +
+      '<fieldset class="card"><legend>' + esc(t(type === 'quote' ? 'lg.qto' : 'lg.' + (pk(T.party, T.kinds[0]) || 'billto'))) + '</legend><div class="fg">' +
+        field('b-name', t(T.buying ? 'l.vname' : 'l.cname'), { ph: t(T.buying ? 'ph.vname' : 'ph.cname'), wide: true, hint: t(T.buying ? 'h.vname' : 'h.cname') }) +
         field('b-addr', t('l.addr'), { type: 'textarea', wide: true }) +
         field('b-city', t('l.city'), {}) + field('b-pin', t('l.pin'), { mode: 'numeric', max: 6, ltr: 1, hint: type === 'invoice' ? t('h.pin') : '' }) +
         field('b-state', t('l.state'), { type: 'state' }) +
@@ -148,8 +181,11 @@
 
       '<fieldset class="card"><legend>' + esc(t('lg.notes')) + '</legend><div class="fg">' +
         field('d-notes', t('l.notes'), { type: 'textarea', wide: true, ph: t('ph.notes') }) +
-        field('d-terms', t('l.terms'), { type: 'textarea', wide: true, ph: t(T.valid ? 'ph.qterms' : 'ph.terms') }) +
-        (T.copy ? '<div class="f"><label for="d-copy">' + esc(t('l.copy')) + '</label><select id="d-copy"><option value="orig">' + esc(t('cp.orig')) + '</option><option value="dup">' + esc(t('cp.dup')) + '</option><option value="trip">' + esc(t('cp.trip')) + '</option><option value="">' + esc(t('cp.none')) + '</option></select></div>' : '') +
+        field('d-terms', t('l.terms'), { type: 'textarea', wide: true, ph: t(T.valid ? 'ph.qterms' : T.buying ? 'ph.poterms' : T.purpose ? 'ph.dcterms' : 'ph.terms') }) +
+        (T.copy ? '<div class="f"><label for="d-copy">' + esc(t('l.copy')) + '</label><select id="d-copy">' + COPIES[T.copy].map(function (k) { return '<option value="' + k + '">' + esc(t('cp.' + k)) + '</option>'; }).join('') + '<option value="">' + esc(t('cp.none')) + '</option></select></div>' +
+          '<div class="f"><label for="d-copies">' + esc(t('l.copies')) + '</label><select id="d-copies">' + COPIES[T.copy].map(function (k, i) { return '<option value="' + (i + 1) + '">' + esc(t(i ? 'cps.n' : 'cps.1', { n: i + 1 })) + '</option>'; }).join('') + '</select><small class="hint">' + esc(t('h.copies')) + '</small></div>' : '') +
+        '<div class="f"><label for="d-paper">' + esc(t('l.paper')) + '</label><select id="d-paper">' + PAPERS.map(function (k) { return '<option value="' + k + '">' + esc(t('pp.' + k)) + '</option>'; }).join('') + '</select></div>' +
+        '<div class="f"><label for="d-design">' + esc(t('l.design')) + '</label><select id="d-design">' + DESIGNS.map(function (k, i) { return '<option value="' + k + '">' + esc(t('ds.' + k)) + (i ? ' · ' + esc(t('pkg')) : '') + '</option>'; }).join('') + '</select><small class="hint">' + esc(t('h.design')) + '</small></div>' +
         (T.pay ? '<div class="f"><label for="d-status">' + esc(t('l.pay')) + '</label><select id="d-status"><option value="unpaid">' + esc(t('pay.unpaid')) + '</option><option value="paid">' + esc(t('pay.paid')) + '</option></select></div>'
           : '<div class="f"><label for="d-status">' + esc(t('l.qstat')) + '</label><select id="d-status">' + T.status.map(function (k) { return '<option value="' + k + '">' + esc(t('qs.' + k)) + '</option>'; }).join('') + '</select></div>') +
         '<div class="f"><span class="lbl" id="acc-lbl">' + esc(t('l.colour')) + '</span><div class="swatches" role="radiogroup" aria-labelledby="acc-lbl">' + ACCENTS.map(function (c, i) { return '<button type="button" role="radio" class="sw" data-accent="' + c + '" style="--c:' + c + '" aria-label="' + esc(t('colour.n', { n: i + 1 })) + '"></button>'; }).join('') + '</div></div>' +
@@ -205,7 +241,9 @@
   var SMAP = { 's-name': 'name', 's-addr': 'addr', 's-city': 'city', 's-pin': 'pin', 's-state': 'state', 's-gstin': 'gstin', 's-phone': 'phone', 's-email': 'email', 's-bankName': 'bankName', 's-bankAcc': 'bankAcc', 's-bankIfsc': 'bankIfsc', 's-bankBranch': 'bankBranch', 's-upi': 'upi' };
   var BMAP = { 'b-name': 'name', 'b-addr': 'addr', 'b-city': 'city', 'b-pin': 'pin', 'b-state': 'state', 'b-gstin': 'gstin', 'b-phone': 'phone' };
   var SHMAP = { 'sh-name': 'name', 'sh-addr': 'addr', 'sh-city': 'city', 'sh-pin': 'pin', 'sh-state': 'state' };
-  var DMAP = { 'd-kind': 'kind', 'd-no': 'no', 'd-date': 'date', 'd-due': 'due', 'd-valid': 'valid', 'd-pos': 'pos', 'd-ref': 'ref', 'd-notes': 'notes', 'd-terms': 'terms', 'd-status': 'status', 'd-copy': 'copyLabel' };
+  var DMAP = { 'd-kind': 'kind', 'd-no': 'no', 'd-date': 'date', 'd-due': 'due', 'd-valid': 'valid', 'd-deliv': 'deliv', 'd-pos': 'pos', 'd-ref': 'ref', 'd-notes': 'notes', 'd-terms': 'terms', 'd-status': 'status', 'd-copy': 'copyLabel',
+    'd-reason': 'reason', 'd-paper': 'paper', 'd-design': 'design', 'd-copies': 'copies' };
+  var OMAP = { 'd-ono': 'no', 'd-odate': 'date' }, TRMAP = { 'tr-veh': 'veh', 'tr-tname': 'tname', 'tr-lr': 'lr' };
 
   function fillForm(onlyLook) {
     var ed = $('#ed', root);
@@ -213,6 +251,8 @@
       Object.keys(SMAP).forEach(function (id) { var e = $('#' + id, ed); if (e) e.value = doc.seller[SMAP[id]] || ''; });
       Object.keys(BMAP).forEach(function (id) { $('#' + id, ed).value = doc.buyer[BMAP[id]] || ''; });
       Object.keys(DMAP).forEach(function (id) { var e = $('#' + id, ed); if (e) e.value = doc[DMAP[id]] == null ? '' : doc[DMAP[id]]; });
+      Object.keys(OMAP).forEach(function (id) { var e = $('#' + id, ed); if (e) e.value = (doc.orig || {})[OMAP[id]] || ''; });
+      Object.keys(TRMAP).forEach(function (id) { var e = $('#' + id, ed); if (e) e.value = (doc.tr || {})[TRMAP[id]] || ''; });
       if ($('#d-rc', ed)) $('#d-rc', ed).checked = !!doc.rc;
       if ($('#d-gst', ed)) $('#d-gst', ed).checked = doc.withGst !== false;
       $('#d-round', ed).checked = !!doc.round; $('#d-comp', ed).checked = doc.comp !== false;
@@ -224,7 +264,7 @@
     }
     $$('[data-accent]', ed).forEach(function (b) { b.setAttribute('aria-checked', String(b.getAttribute('data-accent') === doc.accent)); });
     $('[data-clear="logo"]', ed).hidden = !doc.seller.logo; $('[data-clear="sign"]', ed).hidden = !doc.seller.sign;
-    $('#kind-hint', ed).textContent = t('kh.' + doc.kind);
+    $('#kind-hint', ed).textContent = T.kinds.length > 1 ? t('kh.' + doc.kind) : '';
     $$('.it-gst', ed).forEach(function (f) { f.hidden = !taxOn(doc); });
     $('#comp-box', ed).hidden = doc.kind !== 'supply';
   }
@@ -241,7 +281,9 @@
     if (SMAP[id]) doc.seller[SMAP[id]] = el.value;
     else if (BMAP[id]) doc.buyer[BMAP[id]] = el.value;
     else if (SHMAP[id]) { doc.ship = doc.ship || {}; doc.ship[SHMAP[id]] = el.value; }
-    else if (DMAP[id]) doc[DMAP[id]] = el.value;
+    else if (DMAP[id]) doc[DMAP[id]] = id === 'd-copies' ? +el.value : el.value;
+    else if (OMAP[id]) { doc.orig = doc.orig || {}; doc.orig[OMAP[id]] = el.value; }
+    else if (TRMAP[id]) { doc.tr = doc.tr || {}; doc.tr[TRMAP[id]] = id === 'tr-veh' ? el.value.toUpperCase().replace(/\s+/g, '') : el.value; }
     else if (id === 'd-rc') doc.rc = el.checked;
     else if (id === 'd-gst') { doc.withGst = el.checked; fillForm(true); }
     else if (id === 'd-round') doc.round = el.checked;
@@ -291,57 +333,117 @@
       (p.gstin ? '<p>' + P.gstin + ': <b class="mono">' + esc(p.gstin) + '</b></p>' : '') +
       (p.phone ? '<p>' + P.ph + ': ' + esc(p.phone) + '</p>' : '') + '</div>';
   }
-  function draw() {
-    if (!sheet) return;
-    var d = doc, s = d.seller, tt = totals(d), tax = taxOn(d), SG = sgstName(d), Q = !!T.valid, est = d.kind === 'estimate';
-    var posCode = d.pos || d.buyer.state;
-    var cols = tax ? 9 : 7;
-    var h = '<div class="sh" style="--ac:' + esc(d.accent) + '" lang="en-IN" dir="ltr">' +
+  function title(d) { return P[T.title || d.kind]; }
+  /* label/value pairs of the box under the heading, laid out two per row */
+  function metaPairs(d, tax) {
+    var posCode = d.pos || d.buyer.state, o = d.orig || {}, tr = d.tr || {}, x = [];
+    x.push([P[pk(T.noLbl, d.kind) || 'no'], '<span class="mono">' + esc(d.no) + '</span>'], [P.date, NS.fmtDate(d.date)]);
+    if (T.due) x.push([P.due, NS.fmtDate(d.due)]);
+    if (T.valid) x.push([P.valid, NS.fmtDate(d.valid)]);
+    if (T.deliv && d.deliv) x.push([P.deliv, NS.fmtDate(d.deliv)]);
+    if (T.purpose) x.push([P.purpose, P[d.kind]]);
+    if (T.orig) { x.push([P.against, '<span class="mono">' + esc(o.no) + '</span>'], [P.invdate, NS.fmtDate(o.date)]); x.push([P.reason, P[RP[d.reason] || 'other']]); }
+    x.push([P.pos, posCode ? esc(NS.stateName(posCode)) + ' (' + posCode + ')' : '']);
+    if (T.rc && tax) x.push([P.rc, d.rc ? P.yes : P.no2]);
+    if (d.ref || (type === 'invoice' && tax)) x.push([P[T.refLbl || 'ref'], esc(d.ref)]);
+    if (T.transport) { if (tr.veh) x.push([P.veh, '<span class="mono">' + esc(tr.veh) + '</span>']); if (tr.tname) x.push([P.tname, esc(tr.tname)]); if (tr.lr) x.push([P.lr, esc(tr.lr)]); }
+    return x;
+  }
+  function metaTable(x) {
+    var h = '';
+    for (var i = 0; i < x.length; i += 2) h += '<tr><th>' + x[i][0] + '</th><td' + (x[i + 1] ? '' : ' colspan="3"') + '>' + x[i][1] + '</td>' + (x[i + 1] ? '<th>' + x[i + 1][0] + '</th><td>' + x[i + 1][1] + '</td>' : '') + '</tr>';
+    return '<table class="meta">' + h + '</table>';
+  }
+  function colLbl(tax) { return tax || type === 'invoice' ? P.taxable : T.priceCol ? P.price : T.purpose ? P.value : P.amount; }
+  function made() { return '<p class="made">Made free at ' + esc(/^(localhost|127\.)/.test(location.hostname) ? (window.NS_CFG && NS_CFG.host || 'billing.niveshsahayak.in') : location.hostname.replace(/^www\./, '')) + '</p>'; }
+  function bankHtml(s) {
+    return '<div class="bank"><h4>' + P.bank + '</h4><p>' + esc(s.bankName) + (s.bankAcc ? '<br>' + P.acc + ' <b class="mono">' + esc(s.bankAcc) + '</b>' : '') + (s.bankIfsc ? '<br>' + P.ifsc + ' <b class="mono">' + esc(s.bankIfsc) + '</b>' : '') + (s.bankBranch ? '<br>' + P.branch + ': ' + esc(s.bankBranch) : '') + '</p></div>';
+  }
+  function sheetHtml(d, copyLabel) {
+    var s = d.seller, tt = totals(d), tax = taxOn(d), SG = sgstName(d), note = pk(T.note, d.kind);
+    if (/^th/.test(d.paper)) return thermalHtml(d, tt, tax, SG, copyLabel);
+    var cols = tax ? 9 : 7, pty = pk(T.party, d.kind) || 'billto';
+    return '<div class="sh d-' + esc(d.design || 'classic') + (d.paper === 'a5' ? ' a5' : '') + '" style="--ac:' + esc(d.accent) + '" lang="en-IN" dir="ltr">' +
       (T.pay && d.status === 'paid' ? '<div class="stamp">' + P.paid + '</div>' : '') +
       '<header class="sh-top"><div class="sh-from">' + (s.logo ? '<img class="logo" src="' + s.logo + '" alt="">' : '') +
-        '<div><h2>' + (s.name ? esc(s.name) : '<span class="ph">Your business name</span>') + '</h2>' +
+        '<div>' + (T.buying ? '<p class="role">' + P.buyer + '</p>' : '') + '<h2>' + (s.name ? esc(s.name) : '<span class="ph">Your business name</span>') + '</h2>' +
         (s.addr ? '<p>' + esc(s.addr).replace(/\n/g, '<br>') + '</p>' : '<p class="ph">Address</p>') +
         (s.state ? '<p>' + esc(NS.stateName(s.state)) + ' (' + s.state + ')</p>' : '') +
         (s.gstin ? '<p>' + P.gstin + ': <b class="mono">' + esc(s.gstin) + '</b></p>' : '') +
         ((s.phone || s.email) ? '<p>' + [s.phone ? P.ph + ': ' + esc(s.phone) : '', esc(s.email)].filter(Boolean).join(' · ') + '</p>' : '') +
-      '</div></div><div class="sh-title"><p class="dt">' + P[d.kind] + '</p>' + (T.copy && d.copyLabel ? '<p class="copy">' + P[d.copyLabel] + '</p>' : '') + '</div></header>' +
+      '</div></div><div class="sh-title"><p class="dt">' + title(d) + '</p>' + (T.copy && copyLabel ? '<p class="copy">' + P[copyLabel] + '</p>' : '') + '</div></header>' +
       ext('sheet', d).join('') +
-      '<table class="meta"><tr><th>' + (Q ? (est ? P.eno : P.qno) : P.no) + '</th><td class="mono">' + esc(d.no) + '</td><th>' + P.date + '</th><td>' + NS.fmtDate(d.date) + '</td></tr>' +
-        '<tr>' + (T.due ? '<th>' + P.due + '</th><td>' + NS.fmtDate(d.due) + '</td>' : T.valid ? '<th>' + P.valid + '</th><td>' + NS.fmtDate(d.valid) + '</td>' : '') + '<th>' + P.pos + '</th><td' + (T.due || T.valid ? '' : ' colspan="3"') + '>' + (posCode ? esc(NS.stateName(posCode)) + ' (' + posCode + ')' : '') + '</td></tr>' +
-        (Q ? (d.ref ? '<tr><th>' + P.qref + '</th><td colspan="3">' + esc(d.ref) + '</td></tr>' : '')
-          : tax || d.ref ? '<tr>' + (tax ? '<th>' + P.rc + '</th><td>' + (d.rc ? P.yes : P.no2) + '</td>' : '') + '<th>' + P.ref + '</th><td' + (tax ? '' : ' colspan="3"') + '>' + esc(d.ref) + '</td></tr>' : '') +
-      '</table>' +
-      '<div class="parties">' + party(d.buyer, Q ? (est ? P.efor : P.qfor) : P.billto) + (d.ship ? party(d.ship, P.shipto) : '') + '</div>' +
-      '<table class="lines"><thead><tr><th>#</th><th class="l">' + P.item + '</th><th>' + P.hsn + '</th><th class="n">' + P.qty + '</th><th class="n">' + P.rate + '</th><th class="n">' + P.disc + '</th><th class="n">' + (Q && !tax ? P.price : P.taxable) + '</th>' + (tax ? '<th class="n">' + P.gst + '</th><th class="n">' + P.amount + '</th>' : '') + '</tr></thead><tbody>' +
+      metaTable(metaPairs(d, tax)) +
+      '<div class="parties">' + party(d.buyer, P[pty]) + (d.ship ? party(d.ship, P[T.shipLbl || 'shipto']) : '') + '</div>' +
+      '<table class="lines"><thead><tr><th>#</th><th class="l">' + P.item + '</th><th>' + P.hsn + '</th><th class="n">' + P.qty + '</th><th class="n">' + P.rate + '</th><th class="n">' + P.disc + '</th><th class="n">' + colLbl(tax) + '</th>' + (tax ? '<th class="n">' + P.gst + '</th><th class="n">' + P.amount + '</th>' : '') + '</tr></thead><tbody>' +
       (tt.rows.length ? tt.rows.map(function (r, i) {
-        return '<tr><td>' + (i + 1) + '</td><td class="l">' + esc(r.it.desc) + '</td><td class="mono">' + esc(r.it.hsn) + '</td><td class="n">' + NS.qty(num(r.it.qty)) + ' ' + esc(r.it.unit) + '</td><td class="n">' + NS.money(num(r.it.rate), false) + '</td><td class="n">' + (num(r.it.disc) ? num(r.it.disc) + '%' : '') + '</td><td class="n">' + NS.money(r.taxable, false) + '</td>' +
+        return '<tr><td>' + (i + 1) + '</td><td class="l">' + esc(r.it.desc) + '</td><td class="mono">' + esc(r.it.hsn) + '</td><td class="n">' + NS.qty(num(r.it.qty)) + ' ' + esc(r.it.unit) + '</td><td class="n">' + (num(r.it.rate) ? NS.money(num(r.it.rate), false) : '') + '</td><td class="n">' + (num(r.it.disc) ? num(r.it.disc) + '%' : '') + '</td><td class="n">' + (r.taxable ? NS.money(r.taxable, false) : '') + '</td>' +
           (tax ? '<td class="n">' + r.g + '%</td><td class="n">' + NS.money(r.amount, false) + '</td>' : '') + '</tr>';
       }).join('') : '<tr><td colspan="' + cols + '" class="ph">Items you add appear here</td></tr>') +
       '</tbody></table>' +
       '<div class="foot"><div class="foot-l">' +
-        '<p class="words"><span>' + P.words + ':</span> <b>' + NS.inWords(tt.grand) + '</b></p>' +
+        (tt.grand ? '<p class="words"><span>' + P.words + ':</span> <b>' + NS.inWords(tt.grand) + '</b></p>' : '') +
         (tax && Object.keys(tt.sum).length ? summaryTable(tt, SG) : '') +
         (d.kind === 'supply' && d.comp !== false ? '<p class="small">' + P.supplynote + '</p>' : '') +
-        (Q ? '<p class="small">' + (est ? P.enote : P.qnote) + '</p>' : '') +
-        (s.bankAcc || s.bankName ? '<div class="bank"><h4>' + P.bank + '</h4><p>' + esc(s.bankName) + (s.bankAcc ? '<br>' + P.acc + ' <b class="mono">' + esc(s.bankAcc) + '</b>' : '') + (s.bankIfsc ? '<br>' + P.ifsc + ' <b class="mono">' + esc(s.bankIfsc) + '</b>' : '') + (s.bankBranch ? '<br>' + P.branch + ': ' + esc(s.bankBranch) : '') + '</p></div>' : '') +
-      '</div><div class="foot-r"><table class="tot"><tr><th>' + (Q && !tax ? P.price : P.subtotal) + '</th><td>' + NS.money(tt.taxable) + '</td></tr>' +
+        (note ? '<p class="small">' + P[note] + '</p>' : '') +
+        (!T.buying && (s.bankAcc || s.bankName) ? bankHtml(s) : '') +
+      '</div><div class="foot-r">' + (tt.grand || !T.purpose ? '<table class="tot"><tr><th>' + colLbl(tax) + '</th><td>' + NS.money(tt.taxable) + '</td></tr>' +
         (tax ? (tt.intra ? '<tr><th>' + P.cgst + '</th><td>' + NS.money(tt.cgst) + '</td></tr><tr><th>' + SG + '</th><td>' + NS.money(tt.sgst) + '</td></tr>' : '<tr><th>' + P.igst + '</th><td>' + NS.money(tt.igst) + '</td></tr>') : '') +
         (tt.roundOff ? '<tr><th>' + P.round + '</th><td>' + (tt.roundOff > 0 ? '+' : '−') + NS.money(Math.abs(tt.roundOff)) + '</td></tr>' : '') +
-        '<tr class="grand"><th>' + P.total + '</th><td>' + NS.money(tt.grand) + '</td></tr></table>' +
+        '<tr class="grand"><th>' + P.total + '</th><td>' + NS.money(tt.grand) + '</td></tr></table>' : '') +
         (T.qr && s.upi && tt.grand > 0 && d.status !== 'paid' ? '<div class="qr"><div class="qr-img" data-qr></div><small>' + P.upi + '<br><b class="mono">' + esc(s.upi) + '</b></small></div>' : '') +
       '</div></div>' +
       (d.notes || d.terms ? '<div class="nt">' + (d.notes ? '<div><h4>' + P.notes + '</h4><p>' + esc(d.notes).replace(/\n/g, '<br>') + '</p></div>' : '') + (d.terms ? '<div><h4>' + P.terms + '</h4><p>' + esc(d.terms).replace(/\n/g, '<br>') + '</p></div>' : '') + '</div>' : '') +
-      '<div class="signbox"><p>' + P['for'] + ' <b>' + esc(s.name || '') + '</b></p>' + (s.sign ? '<img src="' + s.sign + '" alt="">' : '<div class="sp"></div>') + '<p>' + P.sign + '</p></div>' +
-      '<p class="made">Made free at ' + esc(/^(localhost|127\.)/.test(location.hostname) ? (window.NS_CFG && NS_CFG.host || 'billing.niveshsahayak.in') : location.hostname.replace(/^www\./, '')) + '</p>' +
-      '</div>';
-    sheet.innerHTML = h;
-    var q = $('[data-qr]', sheet);
-    if (q) drawQr(q, s, d, tt.grand);
+      (T.purpose ? '<div class="signs"><div class="signbox"><p>' + P.recd + '</p><div class="sp"></div><p>' + P.recdsign + '</p></div>' : '') +
+      '<div class="signbox"><p>' + P['for'] + ' <b>' + esc(s.name || '') + '</b></p>' + (s.sign ? '<img src="' + s.sign + '" alt="">' : '<div class="sp"></div>') + '<p>' + P.sign + '</p></div>' + (T.purpose ? '</div>' : '') +
+      made() + '</div>';
+  }
+  /* thermal roll (58 or 80 mm): one narrow column, every line on its own row */
+  function thermalHtml(d, tt, tax, SG, copyLabel) {
+    var s = d.seller, b = d.buyer, line = function (l, r, cls) { return '<tr' + (cls ? ' class="' + cls + '"' : '') + '><th>' + l + '</th><td>' + r + '</td></tr>'; };
+    return '<div class="sh th ' + esc(d.paper) + '" lang="en-IN" dir="ltr">' +
+      (s.logo ? '<img class="logo" src="' + s.logo + '" alt="">' : '') +
+      '<h2>' + (s.name ? esc(s.name) : '<span class="ph">Your business name</span>') + '</h2>' +
+      (s.addr ? '<p>' + esc(s.addr).replace(/\n/g, '<br>') + '</p>' : '') +
+      (s.gstin ? '<p>' + P.gstin + ': <b class="mono">' + esc(s.gstin) + '</b></p>' : '') + (s.phone ? '<p>' + P.ph + ': ' + esc(s.phone) + '</p>' : '') +
+      '<p class="dt">' + title(d) + '</p>' + (T.copy && copyLabel ? '<p class="copy">' + P[copyLabel] + '</p>' : '') +
+      '<table class="kv">' + metaPairs(d, tax).filter(function (p) { return p[1] && p[1] !== '<span class="mono"></span>'; }).map(function (p) { return line(p[0], p[1]); }).join('') +
+        (b.name ? line(P[pk(T.party, d.kind) || 'billto'], esc(b.name)) : '') + (b.gstin ? line(P.gstin, '<span class="mono">' + esc(b.gstin) + '</span>') : '') + '</table>' +
+      '<table class="tl"><thead><tr><th class="l">' + P.item + '</th><th class="n">' + P.amount + '</th></tr></thead><tbody>' +
+      (tt.rows.length ? tt.rows.map(function (r) {
+        return '<tr><td colspan="2" class="l">' + esc(r.it.desc) + (r.it.hsn ? ' <small class="mono">' + esc(r.it.hsn) + '</small>' : '') + '</td></tr>' +
+          '<tr class="q"><td class="l">' + NS.qty(num(r.it.qty)) + ' ' + esc(r.it.unit) + (num(r.it.rate) ? ' × ' + NS.money(num(r.it.rate), false) : '') + (num(r.it.disc) ? ' −' + num(r.it.disc) + '%' : '') + (tax ? ' +' + r.g + '%' : '') + '</td><td class="n">' + (r.amount ? NS.money(r.amount, false) : '') + '</td></tr>';
+      }).join('') : '<tr><td colspan="2" class="ph">Items you add appear here</td></tr>') + '</tbody></table>' +
+      (tt.grand ? '<table class="kv tot">' + line(colLbl(tax), NS.money(tt.taxable)) +
+        (tax ? (tt.intra ? line(P.cgst, NS.money(tt.cgst)) + line(SG, NS.money(tt.sgst)) : line(P.igst, NS.money(tt.igst))) : '') +
+        (tt.roundOff ? line(P.round, (tt.roundOff > 0 ? '+' : '−') + NS.money(Math.abs(tt.roundOff))) : '') + line(P.total, NS.money(tt.grand), 'grand') + '</table>' +
+        '<p class="words">' + NS.inWords(tt.grand) + '</p>' : '') +
+      (T.pay && d.status === 'paid' ? '<p class="paidline">' + P.paid + '</p>' : '') +
+      (T.qr && s.upi && tt.grand > 0 && d.status !== 'paid' ? '<div class="qr"><div class="qr-img" data-qr></div><small>' + P.upi + '<br><b class="mono">' + esc(s.upi) + '</b></small></div>' : '') +
+      (d.notes ? '<p class="nt1">' + esc(d.notes).replace(/\n/g, '<br>') + '</p>' : '') +
+      (type === 'cashmemo' ? '<p class="thanks">' + P.thanks + '</p>' : '') + made() + '</div>';
+  }
+  /* print copies: 1 = the chosen label; 2 or 3 = Original, Duplicate (and Triplicate) one after another */
+  function labelsFor(d, all) {
+    var n = +d.copies || 1;
+    return T.copy && d.copyLabel && all && n > 1 ? COPIES[T.copy].slice(0, n) : [d.copyLabel];
+  }
+  function draw(all) {
+    if (!sheet) return;
+    var d = doc, s = d.seller, tt = totals(d), tax = taxOn(d), SG = sgstName(d);
+    sheet.innerHTML = labelsFor(d, all === true).map(function (l) { return sheetHtml(d, l); }).join('');
+    pageStyle(d.paper);
+    $$('[data-qr]', sheet).forEach(function (q) { drawQr(q, s, d, tt.grand); });
     ext('drawn', sheet);
     var es = $('#ed-sums', root);
     if (es) es.innerHTML = '<span>' + esc(t('sum.items', { n: tt.rows.length })) + '</span><span>' + esc(t('sum.taxable', { v: NS.money(tt.taxable) })) + '</span>' +
       (tax ? '<span>' + esc(t('sum.gst', { v: NS.money(tt.cgst + tt.sgst + tt.igst) })) + (tt.intra ? ' (CGST + ' + SG + ')' : ' (IGST)') + '</span>' : '') + '<b>' + esc(t('sum.total', { v: NS.money(tt.grand) })) + '</b>';
     fit();
+  }
+  /* the printer's paper follows the chosen size */
+  function pageStyle(paper) {
+    var st = $('#ns-page') || document.head.appendChild(Object.assign(document.createElement('style'), { id: 'ns-page' }));
+    st.textContent = '@media print{@page{' + ({ a5: 'size:A5;margin:0', th80: 'size:80mm 297mm;margin:0', th58: 'size:58mm 297mm;margin:0' }[paper] || 'size:A4;margin:0') + '}}';
   }
   function summaryTable(tt, SG) {
     var rows = Object.keys(tt.sum).map(function (k) { return tt.sum[k]; });
@@ -352,13 +454,13 @@
   }
   function drawQr(box, s, d, amount) {
     if (!window.qrcode) return;
-    var link = 'upi://pay?pa=' + encodeURIComponent(s.upi.trim()) + '&pn=' + encodeURIComponent((s.name || '').slice(0, 40)) + '&am=' + amount.toFixed(2) + '&cu=INR&tn=' + encodeURIComponent(('Invoice ' + d.no).slice(0, 40));
+    var link = 'upi://pay?pa=' + encodeURIComponent(s.upi.trim()) + '&pn=' + encodeURIComponent((s.name || '').slice(0, 40)) + '&am=' + amount.toFixed(2) + '&cu=INR&tn=' + encodeURIComponent((docName() + ' ' + d.no).slice(0, 40));
     try { var qr = qrcode(0, 'M'); qr.addData(link); qr.make(); box.innerHTML = qr.createSvgTag({ cellSize: 3, margin: 0, scalable: true }); } catch (e) { box.hidden = true; }
   }
   function fit() {
     var wrap = $('.pv', root), sc = $('.pv-scale', root);
     if (!wrap || !sc || !wrap.clientWidth) return;
-    var k = Math.min(1, wrap.clientWidth / 794);
+    var first = sheet.firstElementChild, k = Math.min(1, wrap.clientWidth / (first && first.offsetWidth || 794));
     sc.style.transform = 'scale(' + k + ')';
     wrap.style.height = (sheet.offsetHeight * k) + 'px';
   }
@@ -402,7 +504,7 @@
     if (!NS.gstinCheck(doc.seller.gstin).ok) probs.push(['s-gstin', t('v.sg')]);
     if (!NS.gstinCheck(doc.buyer.gstin).ok) probs.push(['b-gstin', t('v.bg')]);
     if (doc.kind === 'tax' && !doc.seller.gstin) probs.push(['s-gstin', t('v.tax')]);
-    if (T.gstFlag && taxOn(doc) && !doc.seller.gstin) probs.push(['s-gstin', t('v.qtax')]);
+    if (T.gstFlag && !T.buying && taxOn(doc) && !doc.seller.gstin) probs.push(['s-gstin', t('v.qtax')]);
     return probs;
   }
   function save() {
@@ -419,7 +521,12 @@
     }).then(function () {
       var s = doc.seller, b = doc.buyer, jobs = [];
       jobs.push(upsert('biz', function (x) { return key(x.name) === key(s.name); }, JSON.parse(JSON.stringify(s))));
-      if (b.name.trim()) jobs.push(upsert('party', function (x) { return key(x.name) === key(b.name); }, { name: b.name.trim(), addr: b.addr, city: b.city, pin: b.pin, state: b.state, gstin: b.gstin, phone: b.phone }));
+      if (b.name.trim()) jobs.push(NSStore.list('party').then(function (all) {
+        /* a vendor on a purchase order is saved as a supplier; someone already saved as the other side becomes both */
+        var hit = all.filter(function (x) { return key(x.name) === key(b.name); })[0], want = T.buying ? 'supplier' : 'customer';
+        var role = !hit || !hit.role ? want : hit.role === want || hit.role === 'both' ? hit.role : 'both';
+        return NSStore.put('party', Object.assign(hit || {}, { name: b.name.trim(), addr: b.addr, city: b.city, pin: b.pin, state: b.state, gstin: b.gstin, phone: b.phone, role: role }));
+      }));
       doc.items.forEach(function (it) {
         if (!String(it.desc).trim()) return;
         jobs.push(upsert('item', function (x) { return key(x.desc) === key(it.desc); }, { desc: String(it.desc).trim(), hsn: it.hsn, unit: it.unit, rate: it.rate, gst: it.gst }));
@@ -510,41 +617,47 @@
   /* ---------- print, share ---------- */
   function printDoc() {
     var old = document.title;
-    document.title = docName() + ' ' + (doc.no || '') + (doc.buyer.name ? ' - ' + doc.buyer.name : '');
+    document.title = fileName();
     showTab('preview', true);
+    draw(true);
     fit();
-    setTimeout(function () { window.print(); document.title = old; }, 60);
+    setTimeout(function () { window.print(); document.title = old; draw(); }, 60);
   }
   /* the English name used in file names and shared messages */
-  function docName() { return { quote: 'Quotation', estimate: 'Estimate' }[doc.kind] || 'Invoice'; }
-  function shareDoc() {
+  var NAMES = { tax: 'Invoice', supply: 'Bill of Supply', plain: 'Invoice', quote: 'Quotation', estimate: 'Estimate', proforma: 'Proforma Invoice', so: 'Sales Order', challan: 'Delivery Challan',
+    po: 'Purchase Order', credit: 'Credit Note', debit: 'Debit Note', cashmemo: 'Cash Memo' };
+  function docName() { return NAMES[T.title || doc.kind] || 'Invoice'; }
+  function fileName() { return docName() + ' ' + (doc.no || '') + (doc.buyer.name ? ' - ' + doc.buyer.name : ''); }
+  function shareText() {
     var tt = totals(doc);
-    var txt = docName() + ' ' + doc.no + ' from ' + (doc.seller.name || '') + '\nDate: ' + NS.fmtDate(doc.date) + (doc.due ? '\nDue: ' + NS.fmtDate(doc.due) : '') + (doc.valid ? '\nValid until: ' + NS.fmtDate(doc.valid) : '') + '\nAmount: ' + NS.money(tt.grand) +
-      (doc.seller.upi ? '\nPay by UPI: ' + doc.seller.upi : '') + (doc.seller.bankAcc ? '\nBank: ' + doc.seller.bankName + ' A/c ' + doc.seller.bankAcc + ' IFSC ' + doc.seller.bankIfsc : '');
-    if (navigator.share) navigator.share({ title: docName() + ' ' + doc.no, text: txt }).catch(function () {});
-    else window.open('https://wa.me/?text=' + encodeURIComponent(txt), '_blank', 'noopener');
+    return docName() + ' ' + doc.no + ' from ' + (doc.seller.name || '') + '\nDate: ' + NS.fmtDate(doc.date) + (doc.due ? '\nDue: ' + NS.fmtDate(doc.due) : '') + (doc.valid ? '\nValid until: ' + NS.fmtDate(doc.valid) : '') +
+      (doc.deliv ? '\nDelivery by: ' + NS.fmtDate(doc.deliv) : '') + (tt.grand ? '\nAmount: ' + NS.money(tt.grand) : '') +
+      (!T.buying && doc.seller.upi && T.qr ? '\nPay by UPI: ' + doc.seller.upi : '') + (!T.buying && doc.seller.bankAcc && (T.qr || T.pay) ? '\nBank: ' + doc.seller.bankName + ' A/c ' + doc.seller.bankAcc + ' IFSC ' + doc.seller.bankIfsc : '');
   }
-
-  /* ---------- quotation -> invoice: the quotation is saved first, then the billing site opens it by id from the shared data home ---------- */
+  /* Share = a PDF through the phone's share sheet (WhatsApp, email…); where files can't be shared it downloads the PDF */
+  function shareDoc() {
+    showTab('preview', true); fit();
+    NS.sharePdf($$('.sh', sheet), fileName(), doc.paper, docName() + ' ' + doc.no, shareText());
+  }
+  /* ---------- quotation, proforma, sales order or challan -> invoice: saved first, then the billing site opens it by id from the shared data home ---------- */
   function toInvoice() {
     save().then(function (rec) { location.href = BILLING + '?from=' + encodeURIComponent(rec.id); }).catch(function () {});
   }
   function fromQuote(id) {
     return NSStore.get('doc', id).then(function (q) {
       if (!q || q.type === type) { NS.toast(t('conv.none'), 'bad'); return false; }
-      var inv = blank(), qd = JSON.parse(JSON.stringify(q));
+      var inv = blank(), qd = JSON.parse(JSON.stringify(q)), src = TYPES[qd.type] || {};
       inv.seller = Object.assign(inv.seller, qd.seller); delete inv.seller.id; delete inv.seller.created; delete inv.seller.updated;
       inv.buyer = qd.buyer; inv.ship = qd.ship || null; inv.pos = qd.pos || ''; inv.items = qd.items; inv.notes = qd.notes || inv.notes;
       inv.round = qd.round !== false; inv.accent = qd.accent || inv.accent;
-      inv.kind = qd.withGst === false ? (inv.seller.gstin ? 'supply' : 'plain') : 'tax';
-      inv.ref = ({ quote: 'Quotation ', estimate: 'Estimate ' }[qd.kind] || '') + qd.no;
+      inv.kind = !inv.seller.gstin ? 'plain' : qd.withGst === false && !src.gstOff ? 'supply' : 'tax';
+      inv.ref = (NAMES[src.title || qd.kind] ? NAMES[src.title || qd.kind] + ' ' : '') + qd.no;
       inv.fromId = q.id;
       doc = inv; editingId = null;
-      NS.toast(t('conv.done', { doc: t('doc.' + (qd.kind === 'estimate' ? 'estimate' : 'quote')), no: qd.no }));
+      NS.toast(t('conv.done', { doc: t('doc.' + (qd.kind === 'estimate' ? 'estimate' : qd.type)), no: qd.no }));
       return true;
     }).catch(function () { NS.toast(t('conv.none'), 'bad'); return false; });
   }
-
   /* ---------- phone tabs ---------- */
   function showTab(which, quiet) {
     root.setAttribute('data-tab', which);
@@ -567,7 +680,9 @@
     root = $('#tool');
     if (!root) return;
     type = root.getAttribute('data-doc') || 'invoice';
-    T = TYPES[type] || TYPES.invoice;
+    T = Object.assign({}, TYPES[type] || TYPES.invoice);
+    /* one engine type can serve two sites: the estimate site opens the quotation type on its Estimate kind */
+    var k0 = root.getAttribute('data-kind'); if (k0 && T.kinds.indexOf(k0) >= 0) T.kind0 = k0;
     sheet = $('#sheet', root);
     dkey = 'ns-draft-' + type;
     var ed = $('#ed', root);

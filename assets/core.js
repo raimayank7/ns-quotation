@@ -295,6 +295,63 @@
     }).catch(function () {});
   };
 
+  /* ---------- PDF for the share sheet: the printed sheets drawn into a PDF in the browser (html2canvas + jsPDF, loaded only when needed) ---------- */
+  var JS = {}, LIBS = [['https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js', 'sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H'],
+    ['https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', 'sha384-JcnsjUPPylna1s1fvi1u12X5qjY5OL56iySh75FdtrwhO/SWXgMjoVqcKyIIWOLk']];
+  NS.loadJs = function (src, sri) {
+    return JS[src] || (JS[src] = new Promise(function (res, rej) {
+      var s = document.createElement('script');
+      s.src = src; if (sri) { s.integrity = sri; s.crossOrigin = 'anonymous'; } s.referrerPolicy = 'no-referrer';
+      s.onload = res; s.onerror = function () { delete JS[src]; rej(new Error('load')); };
+      document.head.appendChild(s);
+    }));
+  };
+  var PAGE = { a4: [210, 297], a5: [148, 210], th80: [80, 0], th58: [58, 0] };
+  NS.makePdf = function (nodes, paper) {
+    return Promise.all(LIBS.map(function (l) { return NS.loadJs(l[0], l[1]); })).then(function () {
+      var box = document.createElement('div');
+      box.style.cssText = 'position:fixed;left:-12000px;top:0;background:#fff';
+      document.body.appendChild(box);
+      var pg = PAGE[paper] || PAGE.a4, pdf = null;
+      var shots = Array.prototype.map.call(nodes, function (n) { var c = n.cloneNode(true); c.classList.remove('a5'); box.appendChild(c); return c; });
+      return shots.reduce(function (p, c) {
+        return p.then(function () { return window.html2canvas(c, { scale: 2, backgroundColor: '#ffffff', logging: false }); }).then(function (cv) {
+          var w = pg[0], h = Math.max(pg[1], cv.height * w / cv.width), fmt = [w, h];
+          if (!pdf) pdf = new window.jspdf.jsPDF({ unit: 'mm', format: fmt, orientation: 'portrait', compress: true });
+          else pdf.addPage(fmt, 'portrait');
+          pdf.addImage(cv.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, w, cv.height * w / cv.width);
+        });
+      }, Promise.resolve()).then(function () { box.remove(); return pdf.output('blob'); }, function (e) { box.remove(); throw e; });
+    });
+  };
+  function saveBlob(blob, name) {
+    var a = document.createElement('a'), u = URL.createObjectURL(blob);
+    a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(u); }, 4000);
+  }
+  /* phone: share sheet with the PDF file; computer or old phone: the PDF is downloaded. A slow PDF can outlast the tap, so then one more tap shares it. */
+  NS.sharePdf = function (nodes, name, paper, title, text) {
+    var fname = String(name).replace(/[\\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 90) + '.pdf';
+    NS.toast(NS.t('pdf.making'));
+    return NS.makePdf(nodes, paper).then(function (blob) {
+      var file = new File([blob], fname, { type: 'application/pdf' });
+      var can = navigator.canShare && navigator.canShare({ files: [file] });
+      if (!can) { saveBlob(blob, fname); NS.toast(NS.t('pdf.saved', { file: fname })); return; }
+      var go = function () { return navigator.share({ files: [file], title: title, text: text }); };
+      return go().catch(function (e) {
+        if (e && e.name === 'AbortError') return;
+        var b = NS.el('button', { type: 'button', 'class': 'btn primary pdf-again' }, NS.esc(NS.t('pdf.tap')));
+        b.addEventListener('click', function () { b.remove(); go().catch(function () { saveBlob(blob, fname); }); });
+        document.body.appendChild(b);
+        setTimeout(function () { b.remove(); }, 20000);
+      });
+    }).catch(function () {
+      NS.toast(NS.t('pdf.fail'), 'bad');
+      if (navigator.share) navigator.share({ title: title, text: text }).catch(function () {});
+      else window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener');
+    });
+  };
+
   /* ---------- page start ---------- */
   NS.start = function () {
     if (NS.initLang) NS.initLang();
