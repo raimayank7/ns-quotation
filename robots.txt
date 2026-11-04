@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://quotation.niveshsahayak.in/sitemap.xml
