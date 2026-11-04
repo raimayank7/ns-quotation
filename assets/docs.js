@@ -583,6 +583,7 @@
       return NSStore.meta('settings').then(function (c) { CFG = c || {}; }, function () {});
     }).then(function () {
       var from = new URLSearchParams(location.search).get('from');
+      if (NS.leaving) return;   /* this page is moving to the visitor's language page, which reads ?from= itself */
       if (from) {
         history.replaceState(null, '', location.pathname + location.hash);
         return fromQuote(from).then(function (ok) { if (ok) { render(); saveDraft(); return suggestNumber(true); } });
